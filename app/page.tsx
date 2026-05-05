@@ -1,6 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
+
+const PLAYERS = ["Liam", "Kennedy", "Deáglan"] as const;
+
+type PlayerName = (typeof PLAYERS)[number];
 
 type Workout = {
   id: string;
@@ -19,6 +24,7 @@ type WorkoutTab = {
 
 type MatchEntry = {
   id: string;
+  playerName: PlayerName;
   tournament: string;
   opponent: string;
   result: "Win" | "Loss" | "Draw" | "Practice";
@@ -353,6 +359,7 @@ const starterTabs: WorkoutTab[] = [
 ];
 
 export default function Page() {
+  const [selectedPlayer, setSelectedPlayer] = useState<PlayerName>("Liam");
   const [view, setView] = useState<"workouts" | "analysis">("workouts");
 
   const [tabs, setTabs] = useState<WorkoutTab[]>(starterTabs);
@@ -368,9 +375,11 @@ export default function Page() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [matchEntries, setMatchEntries] = useState<MatchEntry[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [currentMatch, setCurrentMatch] = useState<MatchEntry>({
     id: "live-match",
+    playerName: selectedPlayer,
     tournament: "",
     opponent: "",
     result: "Practice",
@@ -385,6 +394,49 @@ export default function Page() {
     doubleFaults: 0,
     notes: "",
   });
+
+  useEffect(() => {
+    setCurrentMatch((current) => ({ ...current, playerName: selectedPlayer }));
+    loadMatches();
+  }, [selectedPlayer]);
+
+  async function loadMatches() {
+    setLoading(true);
+
+    const { data, error } = await supabase
+      .from("matches")
+      .select("*")
+      .eq("player_name", selectedPlayer)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Load matches error:", error);
+      setLoading(false);
+      return;
+    }
+
+    const loadedMatches: MatchEntry[] =
+      data?.map((row: any) => ({
+        id: String(row.id),
+        playerName: row.player_name || selectedPlayer,
+        tournament: row.tournament_name || "Practice Session",
+        opponent: row.opponent_name || "Unknown Opponent",
+        result: row.result || "Practice",
+        date: row.date || new Date().toISOString().slice(0, 10),
+        matchDayMeals: row.match_day_meals || "",
+        weatherDescription: row.weather || "",
+        forehandErrors: Number(row.forehand_errors || 0),
+        backhandErrors: Number(row.backhand_errors || 0),
+        forehandWinners: Number(row.forehand_winners || 0),
+        backhandWinners: Number(row.backhand_winners || 0),
+        firstServesIn: Number(row.first_serves_in || 0),
+        doubleFaults: Number(row.double_faults || 0),
+        notes: row.notes || "",
+      })) || [];
+
+    setMatchEntries(loadedMatches);
+    setLoading(false);
+  }
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
 
@@ -411,6 +463,7 @@ export default function Page() {
 
     return matchEntries.filter((entry) =>
       [
+        entry.playerName,
         entry.tournament,
         entry.opponent,
         entry.result,
@@ -513,7 +566,7 @@ export default function Page() {
     );
   }
 
-  function addWorkout() {
+  async function addWorkout() {
     const cleanName = newWorkoutName.trim();
     if (!cleanName) return;
 
@@ -524,6 +577,23 @@ export default function Page() {
       level: newWorkoutLevel,
       minutes: newWorkoutMinutes,
     };
+
+    const { error } = await supabase.from("workouts").insert([
+      {
+        player_name: selectedPlayer,
+        name: newWorkout.name,
+        focus: newWorkout.focus,
+        level: newWorkout.level,
+        duration: newWorkout.minutes,
+        notes: `Saved under ${activeTab.name}`,
+      },
+    ]);
+
+    if (error) {
+      console.error("Workout save error:", error);
+      alert("Workout did not save");
+      return;
+    }
 
     setTabs((current) =>
       current.map((tab) =>
@@ -537,6 +607,8 @@ export default function Page() {
     setNewWorkoutFocus("");
     setNewWorkoutMinutes(20);
     setNewWorkoutLevel("Intermediate");
+
+    alert(`${selectedPlayer}'s workout saved`);
   }
 
   function deleteWorkout(id: string) {
@@ -561,18 +633,46 @@ export default function Page() {
     }));
   }
 
-  function saveMatchEntry() {
+  async function saveMatchEntry() {
     const savedMatch: MatchEntry = {
       ...currentMatch,
       id: "match-" + Date.now(),
+      playerName: selectedPlayer,
       tournament: currentMatch.tournament.trim() || "Practice Session",
       opponent: currentMatch.opponent.trim() || "Unknown Opponent",
     };
+
+    const { error } = await supabase.from("matches").insert([
+      {
+        player_name: selectedPlayer,
+        tournament_name: savedMatch.tournament,
+        opponent_name: savedMatch.opponent,
+        result: savedMatch.result,
+        winner: savedMatch.result === "Win" ? selectedPlayer : savedMatch.opponent,
+        date: savedMatch.date,
+        match_day_meals: savedMatch.matchDayMeals,
+        weather: savedMatch.weatherDescription,
+        forehand_errors: savedMatch.forehandErrors,
+        backhand_errors: savedMatch.backhandErrors,
+        forehand_winners: savedMatch.forehandWinners,
+        backhand_winners: savedMatch.backhandWinners,
+        first_serves_in: savedMatch.firstServesIn,
+        double_faults: savedMatch.doubleFaults,
+        notes: savedMatch.notes,
+      },
+    ]);
+
+    if (error) {
+      console.error("Match save error:", error);
+      alert("Match did not save");
+      return;
+    }
 
     setMatchEntries((current) => [savedMatch, ...current]);
 
     setCurrentMatch({
       id: "live-match",
+      playerName: selectedPlayer,
       tournament: "",
       opponent: "",
       result: "Practice",
@@ -587,6 +687,20 @@ export default function Page() {
       doubleFaults: 0,
       notes: "",
     });
+
+    alert(`${selectedPlayer}'s match saved`);
+  }
+
+  async function deleteMatch(id: string) {
+    const { error } = await supabase.from("matches").delete().eq("id", id);
+
+    if (error) {
+      console.error("Delete match error:", error);
+      alert("Match did not delete from database");
+      return;
+    }
+
+    setMatchEntries((current) => current.filter((item) => item.id !== id));
   }
 
   return (
@@ -598,7 +712,7 @@ export default function Page() {
         <section className="mx-auto max-w-7xl">
           <header className="mb-8 rounded-[2.5rem] border border-white/15 bg-white/10 p-8 shadow-2xl backdrop-blur-2xl">
             <p className="mb-3 text-sm font-black uppercase tracking-[0.4em] text-lime-300">
-              Liam’s Tennis Program
+              Downes Tennis
             </p>
 
             <h1 className="text-5xl font-black tracking-tight md:text-7xl">
@@ -606,12 +720,30 @@ export default function Page() {
             </h1>
 
             <p className="mt-4 max-w-3xl text-lg text-slate-200">
-              Build custom workouts, track match stats, save performance
-              history, and search by tournament, opponent, result, meals,
-              weather, or notes.
+              Track workouts and match results for Liam, Kennedy, and Deáglan.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
+              {PLAYERS.map((player) => (
+                <button
+                  key={player}
+                  onClick={() => {
+                    setSelectedPlayer(player);
+                    setSelectedWorkoutIds([]);
+                    setSearchTerm("");
+                  }}
+                  className={`rounded-2xl px-5 py-3 font-black transition ${
+                    selectedPlayer === player
+                      ? "bg-lime-300 text-slate-950 shadow-xl shadow-lime-300/20"
+                      : "bg-white/10 text-white hover:bg-white/20"
+                  }`}
+                >
+                  {player}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-3">
               <button
                 onClick={() => setView("workouts")}
                 className={`rounded-2xl px-5 py-3 font-black transition ${
@@ -639,7 +771,9 @@ export default function Page() {
           {view === "workouts" && (
             <div className="grid gap-6 lg:grid-cols-[260px_1fr_360px]">
               <aside className="rounded-[2.5rem] border border-white/15 bg-white/10 p-5 shadow-2xl backdrop-blur-2xl">
-                <h2 className="mb-4 text-xl font-black">Workout Tabs</h2>
+                <h2 className="mb-4 text-xl font-black">
+                  {selectedPlayer}'s Workout Tabs
+                </h2>
 
                 <div className="space-y-2">
                   {tabs.map((tab) => (
@@ -723,7 +857,9 @@ export default function Page() {
                 </div>
 
                 <div className="mb-6 rounded-3xl bg-black/35 p-5">
-                  <h3 className="mb-4 text-xl font-black">Add Workout</h3>
+                  <h3 className="mb-4 text-xl font-black">
+                    Add Workout For {selectedPlayer}
+                  </h3>
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <input
@@ -772,7 +908,7 @@ export default function Page() {
                     onClick={addWorkout}
                     className="mt-4 rounded-xl bg-lime-300 px-5 py-3 font-black text-slate-950 hover:bg-lime-200"
                   >
-                    Add Workout
+                    Save Workout For {selectedPlayer}
                   </button>
                 </div>
 
@@ -839,10 +975,9 @@ export default function Page() {
               </section>
 
               <aside className="rounded-[2.5rem] border border-white/15 bg-white/10 p-6 shadow-2xl backdrop-blur-2xl">
-                <h2 className="text-2xl font-black">Today’s Plan</h2>
-                <p className="mt-2 text-sm text-slate-300">
-                  Selected workouts populate here.
-                </p>
+                <h2 className="text-2xl font-black">
+                  {selectedPlayer}'s Plan
+                </h2>
 
                 <div className="my-5 rounded-3xl border border-white/10 bg-black/35 p-5 shadow-xl backdrop-blur-xl">
                   <p className="text-sm uppercase tracking-widest text-slate-400">
@@ -890,9 +1025,13 @@ export default function Page() {
           {view === "analysis" && (
             <div className="grid gap-6 lg:grid-cols-[1fr_470px]">
               <section className="rounded-[2.5rem] border border-white/15 bg-white/10 p-6 shadow-2xl backdrop-blur-2xl">
-                <h2 className="text-3xl font-black">Match Entry</h2>
+                <h2 className="text-3xl font-black">
+                  {selectedPlayer}'s Match Entry
+                </h2>
+
                 <p className="mt-2 text-slate-300">
-                  Enter match data. The live cards update immediately.
+                  Enter match data for {selectedPlayer}. The dashboard updates
+                  by player.
                 </p>
 
                 <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -953,7 +1092,7 @@ export default function Page() {
                     onChange={(value) =>
                       updateCurrentMatch("matchDayMeals", value)
                     }
-                    placeholder="Example: eggs, banana, electrolytes, chicken and rice..."
+                    placeholder="Example: eggs, banana, electrolytes..."
                   />
 
                   <TextArea
@@ -962,7 +1101,7 @@ export default function Page() {
                     onChange={(value) =>
                       updateCurrentMatch("weatherDescription", value)
                     }
-                    placeholder="Example: hot, humid, windy, sunny, heavy court..."
+                    placeholder="Example: hot, humid, windy..."
                   />
 
                   <StatInput
@@ -1038,17 +1177,19 @@ export default function Page() {
                   onClick={saveMatchEntry}
                   className="mt-6 rounded-2xl bg-lime-300 px-6 py-4 font-black text-slate-950 shadow-xl shadow-lime-300/20 hover:bg-lime-200"
                 >
-                  Save Match To Dashboard
+                  Save {selectedPlayer}'s Match
                 </button>
               </section>
 
               <aside className="rounded-[2.5rem] border border-white/15 bg-white/10 p-6 shadow-2xl backdrop-blur-2xl">
-                <h2 className="text-2xl font-black">Performance Dashboard</h2>
+                <h2 className="text-2xl font-black">
+                  {selectedPlayer}'s Dashboard
+                </h2>
 
                 <input
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Search opponent, tournament, result, meals, weather..."
+                  placeholder="Search opponent, tournament, result..."
                   className="mt-4 w-full rounded-2xl border border-white/15 bg-black/40 px-4 py-4 outline-none focus:border-lime-300"
                 />
 
@@ -1084,9 +1225,13 @@ export default function Page() {
                 </div>
 
                 <div className="mt-6 space-y-3">
-                  {filteredMatches.length === 0 ? (
+                  {loading ? (
                     <p className="rounded-2xl bg-black/35 p-4 text-slate-300">
-                      No matches saved yet.
+                      Loading matches...
+                    </p>
+                  ) : filteredMatches.length === 0 ? (
+                    <p className="rounded-2xl bg-black/35 p-4 text-slate-300">
+                      No matches saved for {selectedPlayer} yet.
                     </p>
                   ) : (
                     filteredMatches.map((entry) => {
@@ -1114,11 +1259,7 @@ export default function Page() {
                             </div>
 
                             <button
-                              onClick={() =>
-                                setMatchEntries((current) =>
-                                  current.filter((item) => item.id !== entry.id)
-                                )
-                              }
+                              onClick={() => deleteMatch(entry.id)}
                               className="rounded-xl bg-red-500/20 px-3 py-2 text-sm font-black text-red-200"
                             >
                               Delete
