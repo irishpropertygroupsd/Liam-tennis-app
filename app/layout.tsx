@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Liam Tennis App",
-  description: "Track workouts and matches",
+  title: "Downes Tennis",
+  description: "Track tennis workouts and match results",
   icons: {
     icon: "/icon.png",
     apple: "/apple-touch-icon.png",
